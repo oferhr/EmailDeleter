@@ -1,0 +1,34 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.11.35431.28
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "EmailDeleter", "EmailDeleter\EmailDeleter.csproj", "{512374DB-6DF7-4FAF-98A4-C219F737CD31}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{512374DB-6DF7-4FAF-98A4-C219F737CD31}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{512374DB-6DF7-4FAF-98A4-C219F737CD31}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{512374DB-6DF7-4FAF-98A4-C219F737CD31}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{512374DB-6DF7-4FAF-98A4-C219F737CD31}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {E39CFAA4-4E35-40F2-B72D-A91348E773D7}
+	EndGlobalSection
+	GlobalSection(TeamFoundationVersionControl) = preSolution
+		SccNumberOfProjects = 2
+		SccEnterpriseProvider = {4CA58AB2-18FA-4F8D-95D4-32DDF27D184C}
+		SccTeamFoundationServer = https://oferh.visualstudio.com/
+		SccLocalPath0 = .
+		SccProjectUniqueName1 = EmailDeleter\\EmailDeleter.csproj
+		SccProjectName1 = EmailDeleter
+		SccLocalPath1 = EmailDeleter
+	EndGlobalSection
+EndGlobal
