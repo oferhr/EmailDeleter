@@ -40,14 +40,15 @@ class Program
     }
     static async Task<int> fetchEmails(ConfigData config, string dir, int days, bool isDeleted)
     {
-        //var clientId = "14ef1b2a-da52-4aec-8438-0a5c24326c6e";
-        //var tenentId = "7a5b4a33-c120-4e8e-a41b-e5907534e115";
-        //var secret = "R0B8Q~ShoSVlB_w2tY~ruRXHBfYOUkF.3Z-WIaxx";
+        // Load secrets from graph-secrets.json
+        var secretsConfig = new ConfigurationBuilder()
+            .SetBasePath(AppContext.BaseDirectory)
+            .AddJsonFile("graph-secrets.json", optional: false, reloadOnChange: true)
+            .Build();
+        var clientId = secretsConfig["clientId"];
+        var tenentId = secretsConfig["tenantId"];
+        var secret = secretsConfig["secret"];
 
-
-        var clientId = "dd85b611-33c5-4744-8ef8-56d389a792bb";
-        var tenentId = "ca91d845-398d-4116-a8a7-c23eabe5d9a7";
-        var secret = "C1e8Q~9vnzNXL5wVnPzvusC9f3DNOV.L5IGzYcVf";
 
         infoLogger.LogInfo($"Fetching emails for {config.email} in {dir} folder.");
         var clientSecretCredential = new ClientSecretCredential(tenentId, clientId, secret);

@@ -1,0 +1,8 @@
+# Ignore a file named 'graph-secrets.json' only at the root of the repository
+/graph-secrets.json
+# Ignore bin directory
+bin/
+# Ignore obj directory
+obj/
+# Ignore .vs directory
+/.vs
