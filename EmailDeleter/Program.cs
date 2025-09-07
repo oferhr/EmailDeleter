@@ -26,9 +26,6 @@ class Program
         
         try
         {
-            setInfoLogger();
-            logger.LogInfo("Info logger initialized successfully");
-            
             var ConfigData = ReadConfig();
             logger.LogInfo($"Configuration loaded successfully. Processing {ConfigData.Count} email accounts");
             
@@ -43,11 +40,13 @@ class Program
                 
                 var configDuration = DateTime.UtcNow - configStartTime;
                 logger.LogPerformance($"Processing {config.email}", configDuration, $"Inbox: {counts["Inbox"]}, SentItems: {counts["SentItems"]}, DeletedItems: {counts["DeletedItems"]}");
+                infoLogger.LogInfo($"Emails deleted: Inbox: {counts["Inbox"]}, SentItems: {counts["SentItems"]}, DeletedItems: {counts["DeletedItems"]}");
+                var totalDuration = DateTime.UtcNow - startTime;
+                logger.LogPerformance("Total application execution for " + config.email, totalDuration, $"Total emails processed: {counts.Values.Sum()}");
             }
             
-            var totalDuration = DateTime.UtcNow - startTime;
-            logger.LogPerformance("Total application execution", totalDuration, $"Total emails processed: {counts.Values.Sum()}");
-            infoLogger.LogInfo($"Emails deleted: Inbox: {counts["Inbox"]}, SentItems: {counts["SentItems"]}, DeletedItems: {counts["DeletedItems"]}");
+            
+            
             logger.LogInfo("EmailDeleter application completed successfully");
         }
         catch (Exception ex)
@@ -65,14 +64,20 @@ class Program
                     .SetBasePath(AppContext.BaseDirectory)
                     .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
                     .Build();
-            
 
-            var enableDebugLogging = config.GetSection("Logging").Value != null
-                ? bool.Parse(config.GetSection("Logging").Value)
+            var path = config["CofigFile:infoLogDir"];
+            if (string.IsNullOrEmpty(path))
+            {
+                logger.LogWarning("Info log directory not configured, using default path");
+                path = AppContext.BaseDirectory;
+            }
+            var enableDebugLogging = config["Logging:EnableDebugLogging"] != null
+                ? bool.Parse(config["Logging:EnableDebugLogging"])
                 : false;
-            logger = new SimpleLogger("log", string.Empty, enableDebugLogging);
-            
-            Console.WriteLine($"Logger initialized with debug logging: {enableDebugLogging}");
+            logger = new SimpleLogger("log", path, enableDebugLogging);
+
+            infoLogger = new SimpleLogger("log", path, enableDebugLogging);
+            logger.LogInfo($"Info logger initialized with path: {path}");
         }
         catch (Exception ex)
         {
@@ -82,40 +87,17 @@ class Program
         }
     }
     
-    private static void setInfoLogger()
-    {
-        try
-        {
-            var config = new ConfigurationBuilder()
-                    .SetBasePath(AppContext.BaseDirectory) // Set the base path
-                    .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true) // Add the JSON config file
-                    .Build();
-            var path = config["CofigFile:infoLogDir"];
-            if (string.IsNullOrEmpty(path))
-            {
-                logger.LogWarning("Info log directory not configured, using default path");
-                path = AppContext.BaseDirectory;
-            }
-            infoLogger = new SimpleLogger("log", path, true);
-            logger.LogInfo($"Info logger initialized with path: {path}");
-        }
-        catch (Exception ex)
-        {
-            logger.LogError("Failed to initialize info logger", ex);
-            throw;
-        }
-    }
     static async Task<int> fetchEmails(ConfigData config, string dir, int days, bool isDeleted)
     {
         var startTime = DateTime.UtcNow;
         logger.LogInfo($"Starting email fetch for {config.email} in {dir} folder (days: {days}, isDeleted: {isDeleted})");
 
-        // Load secrets from graph-secrets.json
+        //Load secrets from graph-secrets.json
         // We keep secrets in external file to avoid committing them to git during development
-        // for production use 
+        // for production use
         // var clientId = "xxx";
-        // var tenentId = "xxx";
-        // var secret = "xxx";
+        //var tenentId = "xxx";
+        //var secret = "xxx";
         var secretsConfig = new ConfigurationBuilder()
            .SetBasePath(AppContext.BaseDirectory)
            .AddJsonFile("graph-secrets.json", optional: false, reloadOnChange: true)
@@ -124,9 +106,9 @@ class Program
         var tenentId = secretsConfig["tenantId"];
         var secret = secretsConfig["secret"];
 
-        //var clientId = "xxx";
-        //var tenentId = "xxx";
-        //var secret = "xxx";.
+        //var clientId = "xx";
+        //var tenentId = "xx";
+        //var secret = "xx";
 
         logger.LogDebug($"Using tenant ID: {tenentId}, client ID: {clientId}");
         infoLogger.LogInfo($"Fetching emails for {config.email} in {dir} folder.");
@@ -138,7 +120,7 @@ class Program
         {
             var dateThreshold = DateTime.Now.AddDays(days*-1).ToString("yyyy-MM-ddTHH:mm:ssZ");
             var attachment = config.attachment ? "hasAttachments eq true and" : "";
-            var filter = $"{attachment} receivedDateTime gt {dateThreshold}";
+            var filter = $"{attachment} receivedDateTime lt {dateThreshold}";
             
             logger.LogDebug($"Using filter: {filter}");
             logger.LogDebug($"Date threshold: {dateThreshold}");
@@ -163,18 +145,28 @@ class Program
                 
                 foreach (var message in page.Value)
                 {
-                    logger.LogDebug($"Processing message ID: {message.Id}, Subject: {message.Subject?.Substring(0, Math.Min(50, message.Subject.Length))}...");
+                    if (message?.Id == null)
+                    {
+                        logger.LogWarning("Skipping message with null ID");
+                        continue;
+                    }
+                    
+                    var subjectPreview = message.Subject?.Length > 50 
+                        ? message.Subject.Substring(0, 50) + "..." 
+                        : message.Subject ?? "No Subject";
+                    logger.LogDebug($"Processing message ID: {message.Id}, Subject: {subjectPreview}");
                     
                     var htmlBody = message.Body?.Content ?? "No content available.";
                     var plainTextBody = ExtractPlainTextFromHtml(htmlBody);
                     var emailData = new EmailData
                     {
                         from = message.From?.EmailAddress?.Address ?? "Unknown",
-                        toRecipients = message.ToRecipients?.Select(r => r.EmailAddress?.Address).ToList() ?? new List<string>(),
+                        toRecipients = message.ToRecipients?.Select(r => r.EmailAddress?.Address).Where(addr => !string.IsNullOrEmpty(addr)).ToList() ?? new List<string>(),
                         subject = message.Subject ?? "No Subject",
                         receivedDateTime = message.ReceivedDateTime?.ToString("yyyy-MM-ddTHH:mm:ssZ") ?? "",
                         body = plainTextBody.Trim(),
-                        id = message.Id
+                        id = message.Id,
+                        source = dir // Set the source folder
                     };
 
                     _emails.Add(emailData);
@@ -263,7 +255,7 @@ class Program
                     page = null; // No more pages
                 }
             }
-
+            logger.LogDebug("finish page with page_count of: " + pageCount);
             //Console.WriteLine("All emails processed and deleted.");
         }
         catch (ServiceException ex)
@@ -287,203 +279,286 @@ class Program
     {
         logger.LogDebug($"Starting batch move operation for {emails.Count} emails to DeletedItems");
         
-        var batchRequestContent = new BatchRequestContentCollection(graphClient);
-        var requestDictionary = new Dictionary<string, RequestInformation>();
-        var messageIdMapping = new Dictionary<string, string>();
+        var successCount = 0;
+        var failureCount = 0;
+        var batchStartTime = DateTime.UtcNow;
         
-        foreach (var message in emails)
+        // Process emails in smaller batches to avoid timeout issues
+        const int batchSize = 5;
+        var batches = emails.Chunk(batchSize);
+        
+        foreach (var batch in batches)
         {
-            logger.LogDebug($"Preparing move request for message ID: {message.id}");
-            
-            var moveRequest = graphClient.Users[email]
-                .Messages[message.id]
-                .Move
-                .ToPostRequestInformation(new Microsoft.Graph.Users.Item.Messages.Item.Move.MovePostRequestBody
-                {
-                    DestinationId = "DeletedItems"
-                });
-
-            var httpRequest = await graphClient.RequestAdapter.ConvertToNativeRequestAsync<HttpRequestMessage>(
-                moveRequest,
-                default(CancellationToken)
-            );
-
-            // Add request to batch
-            var requestId = message.id;
-            var batchRequestStep = new BatchRequestStep(requestId, httpRequest, null);
-            batchRequestContent.AddBatchRequestStep(batchRequestStep);
-            requestDictionary.Add(requestId, moveRequest);
-        }
-
-        // Execute the batch request
-        try
-        {
-            logger.LogDebug($"Executing batch move request with {requestDictionary.Count} items");
-            var batchStartTime = DateTime.UtcNow;
-            
-            // Execute the batch request
-            var batchResponse = await graphClient.Batch.PostAsync(batchRequestContent);
-            
-            var batchDuration = DateTime.UtcNow - batchStartTime;
-            logger.LogPerformance($"Batch move request execution", batchDuration);
-
-            var successCount = 0;
-            var failureCount = 0;
-            
-            foreach (var requestId in requestDictionary.Keys)
+            try
             {
-                var response = await batchResponse.GetResponseByIdAsync(requestId);
-                var statusCode = response?.StatusCode ?? System.Net.HttpStatusCode.NotFound;
-
-                if ((int)statusCode == 201) // Successful move
+                logger.LogDebug($"Processing batch of {batch.Count()} emails");
+                
+                var batchRequestContent = new BatchRequestContentCollection(graphClient);
+                var requestDictionary = new Dictionary<string, string>();
+                
+                foreach (var message in batch)
                 {
-                    successCount++;
-                    logger.LogDebug($"Successfully moved message {requestId}");
+                    logger.LogDebug($"Preparing move request for message ID: {message.id}");
                     
-                    if (response?.Content != null)
-                    {
-                        var content = await response.Content.ReadAsStringAsync();
-                        try
+                    // Create the move request using the proper Graph SDK method
+                    var moveRequest = graphClient.Users[email]
+                        .Messages[message.id]
+                        .Move
+                        .ToPostRequestInformation(new Microsoft.Graph.Users.Item.Messages.Item.Move.MovePostRequestBody
                         {
-                            // Parse the response to get the new message ID
-                            using (JsonDocument document = JsonDocument.Parse(content))
-                            {
-                                if (document.RootElement.TryGetProperty("id", out JsonElement idElement))
-                                {
-                                    var newId = idElement.GetString();
-                                    var originalMessage = emails.First(m => m.id == requestId);
+                            DestinationId = "DeletedItems"
+                        });
 
-                                    if (newId != null)
+                    // Convert RequestInformation to HttpRequestMessage
+                    var moveHttpRequest = await graphClient.RequestAdapter.ConvertToNativeRequestAsync<HttpRequestMessage>(
+                        moveRequest,
+                        default(CancellationToken)
+                    );
+
+                    // Add the request to the batch using the proper method
+                    var requestId = Guid.NewGuid().ToString();
+                    batchRequestContent.AddBatchRequestStep(new BatchRequestStep(requestId, moveHttpRequest, null));
+                    requestDictionary.Add(requestId, message.id);
+                }
+
+                logger.LogDebug($"Executing batch move request with {requestDictionary.Count} items");
+                
+                // Execute the batch request
+                var batchResponse = await graphClient.Batch.PostAsync(batchRequestContent);
+                
+                // Process responses for each request
+                foreach (var kvp in requestDictionary)
+                {
+                    var requestId = kvp.Key;
+                    var messageId = kvp.Value;
+                    
+                    try
+                    {
+                        var response = await batchResponse.GetResponseByIdAsync(requestId);
+                        var statusCode = response?.StatusCode ?? System.Net.HttpStatusCode.NotFound;
+
+                        if ((int)statusCode == 201) // Successful move
+                        {
+                            successCount++;
+                            logger.LogDebug($"Successfully moved message {messageId}");
+                            
+                            if (response?.Content != null)
+                            {
+                                var content = await response.Content.ReadAsStringAsync();
+                                try
+                                {
+                                    // Parse the response to get the new message ID
+                                    using (JsonDocument document = JsonDocument.Parse(content))
                                     {
-                                        originalMessage.newId = newId;
-                                        logger.LogDebug($"Message moved. Original ID: {originalMessage.id}, New ID: {newId}");
+                                        if (document.RootElement.TryGetProperty("id", out JsonElement idElement))
+                                        {
+                                            var newId = idElement.GetString();
+                                            var originalMessage = emails.First(m => m.id == messageId);
+
+                                            if (newId != null)
+                                            {
+                                                originalMessage.newId = newId;
+                                                logger.LogDebug($"Message moved. Original ID: {originalMessage.id}, New ID: {newId}");
+                                            }
+                                        }
                                     }
+                                }
+                                catch (JsonException ex)
+                                {
+                                    logger.LogError($"Failed to parse move response for message {messageId}: {ex.Message}", ex);
+                                }
+                                catch (Exception ex)
+                                {
+                                    logger.LogError($"Failed to parse move response for message {messageId}: {ex.Message}", ex);
                                 }
                             }
                         }
-                        catch (JsonException ex)
+                        else
                         {
-                            logger.LogError($"Failed to parse move response for message {requestId}: {ex.Message}", ex);
-                        }
-                        catch (Exception ex)
-                        {
-                            logger.LogError($"Failed to parse move response for message {requestId}: {ex.Message}", ex);
+                            failureCount++;
+                            var content = response != null ? await response.Content.ReadAsStringAsync() : "No content";
+                            logger.LogWarning($"Failed to move message {messageId}. Status: {(int)statusCode}, Error: {content}");
                         }
                     }
-                }
-                else
-                {
-                    failureCount++;
-                    var content = response != null ? await response.Content.ReadAsStringAsync() : "No content";
-                    logger.LogWarning($"Failed to move message {requestId}. Status: {(int)statusCode}, Error: {content}");
+                    catch (Exception ex)
+                    {
+                        failureCount++;
+                        logger.LogError($"Error processing response for message {messageId}: {ex.Message}", ex);
+                    }
                 }
             }
-            
-            logger.LogBatchOperation("Move to DeletedItems", requestDictionary.Count, successCount, failureCount, batchDuration);
-            // Process responses for each request
-            //foreach (var requestId in requestDictionary.Keys)
-            //{
-            //    var response = await batchResponse.GetResponseByIdAsync(requestId);
-            //    var statusCode = response?.StatusCode ?? System.Net.HttpStatusCode.NotFound;
-
-            //    if ((int)statusCode != 201) // 201 is success for move operation
-            //    {
-            //        var content = response != null ? await response.Content.ReadAsStringAsync() : "No content";
-            //        infoLogger.LogInfo($"Failed to move message {requestId}. Status: {(int)statusCode}, Error: {content}");
-            //        //  Console.WriteLine($"Failed to move message {requestId}. Status: {(int)statusCode}, Error: {content}");
-            //    }
-            //}
+            catch (ServiceException ex)
+            {
+                logger.LogError($"Batch move request failed for batch: {ex.Message}", ex);
+                failureCount += batch.Count();
+                
+                // If batch fails, try individual moves as fallback
+                logger.LogDebug("Attempting individual moves as fallback");
+                foreach (var message in batch)
+                {
+                    try
+                    {
+                        var movedMessage = await graphClient.Users[email]
+                            .Messages[message.id]
+                            .Move
+                            .PostAsync(new Microsoft.Graph.Users.Item.Messages.Item.Move.MovePostRequestBody
+                            {
+                                DestinationId = "DeletedItems"
+                            });
+                        
+                        if (movedMessage?.Id != null)
+                        {
+                            message.newId = movedMessage.Id;
+                            successCount++;
+                            failureCount--;
+                            logger.LogDebug($"Individual move successful for message {message.id}");
+                        }
+                    }
+                    catch (Exception individualEx)
+                    {
+                        logger.LogError($"Individual move failed for message {message.id}: {individualEx.Message}", individualEx);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.LogError($"Unexpected error in batch move: {ex.Message}", ex);
+                failureCount += batch.Count();
+            }
         }
-        catch (ServiceException ex)
-        {
-            logger.LogError($"Batch move request failed: {ex.Message}", ex);
-            //Console.WriteLine($"Batch move request failed: {ex.Message}");
-            throw;
-        }
+        
+        var batchDuration = DateTime.UtcNow - batchStartTime;
+        logger.LogBatchOperation("Move to DeletedItems", emails.Count, successCount, failureCount, batchDuration);
+        
         return emails;
     }
     private static async Task ProcessDeleteBatchAsync(List<EmailData> emails, GraphServiceClient graphClient, string email)
     {
         logger.LogDebug($"Starting batch delete operation for {emails.Count} emails from DeletedItems");
         
-        var batchRequestContent = new BatchRequestContentCollection(graphClient);
-        var requestDictionary = new Dictionary<string, RequestInformation>();
-
-        foreach (var message in emails)
+        var successCount = 0;
+        var failureCount = 0;
+        var batchStartTime = DateTime.UtcNow;
+        
+        // Process emails in smaller batches to avoid timeout issues
+        const int batchSize = 5;
+        var batches = emails.Chunk(batchSize);
+        
+        foreach (var batch in batches)
         {
-            logger.LogDebug($"Preparing delete request for message ID: {message.newId} (original: {message.id})");
-            
-            var deleteRequest = graphClient.Users[email]
-                .MailFolders["DeletedItems"]
-                .Messages[message.newId]
-                .ToDeleteRequestInformation();
-
-            // Add headers for hard delete
-            deleteRequest.Headers.Add("Prefer", "permanent");
-
-            // Convert RequestInformation to HttpRequestMessage
-            var httpRequest = await graphClient.RequestAdapter.ConvertToNativeRequestAsync<HttpRequestMessage>(
-                deleteRequest,
-                default(CancellationToken)
-            );
-
-            logger.LogDebug($"Delete request URL: {httpRequest.RequestUri}");
-            logger.LogDebug($"Delete request method: {httpRequest.Method}");
-
-            // Add request to batch
-            var requestId = Guid.NewGuid().ToString();
-            var batchRequestStep = new BatchRequestStep(requestId, httpRequest, null);
-            batchRequestContent.AddBatchRequestStep(batchRequestStep);
-            requestDictionary.Add(requestId, deleteRequest);
-        }
-
-        try
-        {
-            logger.LogDebug($"Executing batch delete request with {requestDictionary.Count} items");
-            var batchStartTime = DateTime.UtcNow;
-            
-            // Execute the batch request
-            var batchResponse = await graphClient.Batch.PostAsync(batchRequestContent);
-            
-            var batchDuration = DateTime.UtcNow - batchStartTime;
-            logger.LogPerformance($"Batch delete request execution", batchDuration);
-
-            var successCount = 0;
-            var failureCount = 0;
-            
-            // Process responses for each request
-            foreach (var requestId in requestDictionary.Keys)
+            try
             {
-                var response = await batchResponse.GetResponseByIdAsync(requestId);
-                var statusCode = response?.StatusCode ?? System.Net.HttpStatusCode.NotFound;
+                logger.LogDebug($"Processing delete batch of {batch.Count()} emails");
+                
+                var batchRequestContent = new BatchRequestContentCollection(graphClient);
+                var requestDictionary = new Dictionary<string, string>();
+                
+                foreach (var message in batch)
+                {
+                    if (string.IsNullOrEmpty(message.newId))
+                    {
+                        logger.LogWarning($"Skipping delete for message {message.id} - no newId available (move may have failed)");
+                        continue;
+                    }
+                    
+                    logger.LogDebug($"Preparing delete request for message ID: {message.newId} (original: {message.id})");
+                    
+                    var deleteRequest = graphClient.Users[email]
+                        .MailFolders["DeletedItems"]
+                        .Messages[message.newId]
+                        .ToDeleteRequestInformation();
 
-                if ((int)statusCode == 204) // 204 is success for delete
-                {
-                    successCount++;
-                    logger.LogDebug($"Successfully deleted message {requestId}");
+                    // Add headers for hard delete
+                    deleteRequest.Headers.Add("Prefer", "permanent");
+
+                    // Convert RequestInformation to HttpRequestMessage
+                    var deleteHttpRequest = await graphClient.RequestAdapter.ConvertToNativeRequestAsync<HttpRequestMessage>(
+                        deleteRequest,
+                        default(CancellationToken)
+                    );
+
+                    // Add the request to the batch using the proper method
+                    var requestId = Guid.NewGuid().ToString();
+                    batchRequestContent.AddBatchRequestStep(new BatchRequestStep(requestId, deleteHttpRequest, null));
+                    requestDictionary.Add(requestId, message.newId);
                 }
-                else
+
+                logger.LogDebug($"Executing batch delete request with {requestDictionary.Count} items");
+                
+                // Execute the batch request
+                var batchResponse = await graphClient.Batch.PostAsync(batchRequestContent);
+                
+                // Process responses for each request
+                foreach (var kvp in requestDictionary)
                 {
-                    failureCount++;
-                    var content = response != null ? await response.Content.ReadAsStringAsync() : "No content";
-                    logger.LogWarning($"Failed to delete message {requestId}. Status: {(int)statusCode}, Error: {content}");
+                    var requestId = kvp.Key;
+                    var messageId = kvp.Value;
+                    
+                    try
+                    {
+                        var response = await batchResponse.GetResponseByIdAsync(requestId);
+                        var statusCode = response?.StatusCode ?? System.Net.HttpStatusCode.NotFound;
+
+                        if ((int)statusCode == 204) // 204 is success for delete
+                        {
+                            successCount++;
+                            logger.LogDebug($"Successfully deleted message {messageId}");
+                        }
+                        else
+                        {
+                            failureCount++;
+                            var content = response != null ? await response.Content.ReadAsStringAsync() : "No content";
+                            logger.LogWarning($"Failed to delete message {messageId}. Status: {(int)statusCode}, Error: {content}");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        failureCount++;
+                        logger.LogError($"Error processing delete response for message {messageId}: {ex.Message}", ex);
+                    }
                 }
             }
-            
-            logger.LogBatchOperation("Delete from DeletedItems", requestDictionary.Count, successCount, failureCount, batchDuration);
+            catch (ServiceException ex)
+            {
+                logger.LogError($"Batch delete request failed for batch: {ex.Message}", ex);
+                failureCount += batch.Count();
+                
+                // If batch fails, try individual deletes as fallback
+                logger.LogDebug("Attempting individual deletes as fallback");
+                foreach (var message in batch)
+                {
+                    if (string.IsNullOrEmpty(message.newId))
+                    {
+                        logger.LogWarning($"Skipping individual delete for message {message.id} - no newId available");
+                        continue;
+                    }
+                    
+                    try
+                    {
+                        await graphClient.Users[email]
+                            .MailFolders["DeletedItems"]
+                            .Messages[message.newId]
+                            .DeleteAsync();
+                        
+                        successCount++;
+                        failureCount--;
+                        logger.LogDebug($"Individual delete successful for message {message.newId}");
+                    }
+                    catch (Exception individualEx)
+                    {
+                        logger.LogError($"Individual delete failed for message {message.newId}: {individualEx.Message}", individualEx);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.LogError($"Unexpected error in batch delete: {ex.Message}", ex);
+                failureCount += batch.Count();
+            }
         }
-        catch (ServiceException ex)
-        {
-            logger.LogError($"Batch delete request failed: {ex.Message}", ex);
-           // Console.WriteLine($"Batch delete request failed: {ex.Message}");
-            throw;
-        }
-        catch (Exception ex)
-        {
-            logger.LogError($"Batch delete request failed: {ex.Message}", ex);
-           // Console.WriteLine($"Batch delete request failed: {ex.Message}");
-            throw;
-        }
+        
+        var batchDuration = DateTime.UtcNow - batchStartTime;
+        logger.LogBatchOperation("Delete from DeletedItems", emails.Count, successCount, failureCount, batchDuration);
     }
     private static bool WriteToExcel(string email)
     {
@@ -534,6 +609,7 @@ class Program
                 worksheet.Cell(1, 3).Value = "Subject";
                 worksheet.Cell(1, 4).Value = "ReceivedDateTime";
                 worksheet.Cell(1, 5).Value = "Body";
+                worksheet.Cell(1, 6).Value = "Source";
 
                 // Set column widths for better readability
                 worksheet.Column(1).Width = 30; // From
@@ -541,6 +617,7 @@ class Program
                 worksheet.Column(3).Width = 50; // Subject
                 worksheet.Column(4).Width = 20; // ReceivedDateTime
                 worksheet.Column(5).Width = 100; // Body
+                worksheet.Column(6).Width = 20; // Source
 
                 // Optional: Add some basic formatting to headers
                 var headerRow = worksheet.Row(1);
@@ -560,6 +637,7 @@ class Program
                 worksheet.Cell(row, 3).Value = _emails[i].subject;
                 worksheet.Cell(row, 4).Value = _emails[i].receivedDateTime;
                 worksheet.Cell(row, 5).Value = _emails[i].body;
+                worksheet.Cell(row, 6).Value = _emails[i].source;
             }
             
             logger.LogDebug($"Added {_emails.Count} email records to Excel");
@@ -701,8 +779,15 @@ class Program
         if (string.IsNullOrEmpty(html))
             return string.Empty;
 
+        var decodedHtml = html
+            .Replace("&nbsp;", " ")
+            .Replace("&lt;", "<")
+            .Replace("&gt;", ">")
+            .Replace("&amp;", "&")
+            .Replace("&quot;", "\"")
+            .Replace("&#39;", "'");
         var htmlDoc = new HtmlDocument();
-        htmlDoc.LoadHtml(html);
+        htmlDoc.LoadHtml(decodedHtml);
 
         // Extract plain text by removing all HTML tags
         return htmlDoc.DocumentNode.InnerText;
@@ -728,6 +813,7 @@ class EmailData
     public string? subject { get; set; }
     public string? receivedDateTime { get; set; }
     public string? newId { get; set; }
+    public string? source { get; set; }
 }
 
 

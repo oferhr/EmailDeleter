@@ -36,12 +36,26 @@ namespace EmailDeleter
         {
             var logFilePath = GetInfoLogFilePath();
             Log("INFO", message, logFilePath);
+            
+            // When debug logging is enabled, also log info messages to debug log
+            if (_enableDebugLogging)
+            {
+                var debugLogFilePath = GetDebugLogFilePath();
+                Log("INFO", message, debugLogFilePath);
+            }
         }
 
         public void LogWarning(string message)
         {
             var logFilePath = GetInfoLogFilePath();
             Log("WARNING", message, logFilePath);
+            
+            // When debug logging is enabled, also log warning messages to debug log
+            if (_enableDebugLogging)
+            {
+                var debugLogFilePath = GetDebugLogFilePath();
+                Log("WARNING", message, debugLogFilePath);
+            }
         }
 
         public void LogDebug(string message)
@@ -58,20 +72,37 @@ namespace EmailDeleter
             var errorMessage = ex == null ? message : $"{message}\nException: {ex.Message}\nStackTrace: {ex.StackTrace}";
             var logFilePath = GetLogFilePath();
             Log("ERROR", errorMessage, logFilePath);
+            
+            // When debug logging is enabled, also log error messages to debug log
+            if (_enableDebugLogging)
+            {
+                var debugLogFilePath = GetDebugLogFilePath();
+                Log("ERROR", errorMessage, debugLogFilePath);
+            }
         }
 
         public void LogPerformance(string operation, TimeSpan duration, string additionalInfo = "")
         {
             var message = $"Performance: {operation} took {duration.TotalMilliseconds:F2}ms {additionalInfo}";
-            var logFilePath = GetInfoLogFilePath();
-            Log("PERFORMANCE", message, logFilePath);
+            
+            // Performance logs only go to debug logger when debug logging is enabled
+            if (_enableDebugLogging)
+            {
+                var logFilePath = GetDebugLogFilePath();
+                Log("PERFORMANCE", message, logFilePath);
+            }
         }
 
         public void LogBatchOperation(string operation, int batchSize, int successCount, int failureCount, TimeSpan duration)
         {
             var message = $"Batch {operation}: Size={batchSize}, Success={successCount}, Failures={failureCount}, Duration={duration.TotalMilliseconds:F2}ms";
-            var logFilePath = GetInfoLogFilePath();
-            Log("BATCH", message, logFilePath);
+            
+            // Batch operation logs only go to debug logger when debug logging is enabled
+            if (_enableDebugLogging)
+            {
+                var logFilePath = GetDebugLogFilePath();
+                Log("BATCH", message, logFilePath);
+            }
         }
 
         private void Log(string logLevel, string message, string logFilePath)

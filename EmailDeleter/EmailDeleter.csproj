@@ -13,7 +13,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <SupportedOSPlatformVersion>8.0</SupportedOSPlatformVersion>
-    <FileVersion>1.0.1.0</FileVersion>
+    <FileVersion>1.0.1.5</FileVersion>
   </PropertyGroup>
 
   <ItemGroup>
