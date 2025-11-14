@@ -15,12 +15,12 @@
         /// Initializes a new instance of the SimpleLogger
         /// </summary>
         /// <param name="baseFileName">Base filename for log files</param>
-        /// <param name="infoLogParg">Directory path for info and debug logs</param>
+        /// <param name="infoLogPath">Directory path for info and debug logs</param>
         /// <param name="enableDebugLogging">Enable detailed debug logging (default: false)</param>
-        public SimpleLogger(string baseFileName, string infoLogParg, bool enableDebugLogging = false)
+        public SimpleLogger(string baseFileName, string infoLogPath, bool enableDebugLogging = false)
         {
             _baseFileName = baseFileName;
-            _infoLogPath = infoLogParg;
+            _infoLogPath = infoLogPath;
             _enableDebugLogging = enableDebugLogging;
         }
 
@@ -178,19 +178,29 @@
             var logMessage = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} [{logLevel}] {message}";
             try
             {
-                if (logFilePath != null)
+                if (!string.IsNullOrEmpty(logFilePath))
                 {
                     // Ensure the directory exists before writing
-                    Directory.CreateDirectory(path: Path.GetDirectoryName(logFilePath));
-                }
+                    var directory = Path.GetDirectoryName(logFilePath);
+                    if (!string.IsNullOrEmpty(directory))
+                    {
+                        Directory.CreateDirectory(directory);
+                    }
 
-                // Append the log message to the file (creates file if doesn't exist)
-                File.AppendAllText(logFilePath, logMessage + Environment.NewLine);
+                    // Append the log message to the file (creates file if doesn't exist)
+                    File.AppendAllText(logFilePath, logMessage + Environment.NewLine);
+                }
+                else
+                {
+                    // Fallback to console if path is invalid
+                    Console.WriteLine(logMessage);
+                }
             }
             catch (Exception ex)
             {
                 // Fallback to console if file writing fails
                 Console.WriteLine($"Failed to write to log file: {ex.Message}");
+                Console.WriteLine(logMessage);
             }
         }
     }
