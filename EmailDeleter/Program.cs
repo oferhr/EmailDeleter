@@ -18,11 +18,18 @@ class Program
     private static List<EmailData> _emails = new List<EmailData>();
 
     // Logger instances for different log types
-    private static SimpleLogger logger;
-    private static SimpleLogger infoLogger;
+    private static SimpleLogger logger = null!;
+    private static SimpleLogger infoLogger = null!;
 
     // Track deletion counts per folder
     private static Dictionary<string, int> counts = new Dictionary<string, int>();
+
+    // Configuration constants
+    private const int BATCH_SIZE = 5;
+    private const int PAGE_SIZE = 10;
+    private const int DEFAULT_DAYS_THRESHOLD = 30;
+    private const int DEFAULT_ATTACHMENT_FLAG = 1;
+    private const int DEFAULT_BODY_FLAG = 1;
 
     /// <summary>
     /// Application entry point
@@ -83,7 +90,7 @@ class Program
                     .Build();
 
             // Get log directory from configuration
-            var path = config["CofigFile:infoLogDir"];
+            var path = config["ConfigFile:infoLogDir"];
             if (string.IsNullOrEmpty(path))
             {
                 logger.LogWarning("Info log directory not configured, using default path");
@@ -129,14 +136,14 @@ class Program
            .AddJsonFile("graph-secrets.json", optional: false, reloadOnChange: true)
            .Build();
         var clientId = secretsConfig["clientId"];
-        var tenentId = secretsConfig["tenantId"];
+        var tenantId = secretsConfig["tenantId"];
         var secret = secretsConfig["secret"];
 
-        logger.LogDebug($"Using tenant ID: {tenentId}, client ID: {clientId}");
+        logger.LogDebug($"Authenticating with Azure AD for user: {config.email}");
         infoLogger.LogInfo($"Fetching emails for {config.email} in {dir} folder.");
 
         // Authenticate with Azure AD using client credentials flow
-        var clientSecretCredential = new ClientSecretCredential(tenentId, clientId, secret);
+        var clientSecretCredential = new ClientSecretCredential(tenantId, clientId, secret);
         var graphClient = new GraphServiceClient(clientSecretCredential);
         int counter = 0;
         try
@@ -161,7 +168,7 @@ class Program
                 {
                     requestConfiguration.QueryParameters.Filter = filter;
                     requestConfiguration.QueryParameters.Select = new string[] { "subject,body,receivedDateTime,from,toRecipients,isRead" };
-                    requestConfiguration.QueryParameters.Top = 10;
+                    requestConfiguration.QueryParameters.Top = PAGE_SIZE;
                 });
 
 
@@ -199,25 +206,6 @@ class Program
                     };
 
                     _emails.Add(emailData);
-                    
-
-                    //Console.WriteLine($"Processing email...");
-                    //Console.WriteLine($"Subject: {emailData.subject}");
-                    //Console.WriteLine($"From: {emailData.from}");
-                    //Console.WriteLine($"To: {string.Join(", ", emailData.toRecipients)}");
-                    //Console.WriteLine($"Received on: {emailData.receivedDateTime}");
-                    //Console.WriteLine($"Body: {emailData.body}");
-                    //Console.WriteLine(new string('-', 50));
-
-                    //Delete the email
-                    //await graphClient.Users[config.email]
-                    //    .Messages[message.Id]
-                    //    .DeleteAsync(Microsoft.Graph.Models.DeletionMode.HardDelete);
-
-                    // Move the message to the Deleted Items folder
-
-
-                    //Console.WriteLine("Email deleted.");
                 }
 
                 // Process the batch of emails
@@ -291,7 +279,6 @@ class Program
                 }
             }
             logger.LogDebug("finish page with page_count of: " + pageCount);
-            //Console.WriteLine("All emails processed and deleted.");
         }
         catch (ServiceException ex)
         {
@@ -323,14 +310,13 @@ class Program
     static async Task<List<EmailData>> moveToDeleted(List<EmailData> emails, GraphServiceClient graphClient, string email)
     {
         logger.LogDebug($"Starting batch move operation for {emails.Count} emails to DeletedItems");
-        
+
         var successCount = 0;
         var failureCount = 0;
         var batchStartTime = DateTime.UtcNow;
-        
+
         // Process emails in smaller batches to avoid timeout issues
-        const int batchSize = 5;
-        var batches = emails.Chunk(batchSize);
+        var batches = emails.Chunk(BATCH_SIZE);
         
         foreach (var batch in batches)
         {
@@ -489,14 +475,13 @@ class Program
     private static async Task ProcessDeleteBatchAsync(List<EmailData> emails, GraphServiceClient graphClient, string email)
     {
         logger.LogDebug($"Starting batch delete operation for {emails.Count} emails from DeletedItems");
-        
+
         var successCount = 0;
         var failureCount = 0;
         var batchStartTime = DateTime.UtcNow;
-        
+
         // Process emails in smaller batches to avoid timeout issues
-        const int batchSize = 5;
-        var batches = emails.Chunk(batchSize);
+        var batches = emails.Chunk(BATCH_SIZE);
         
         foreach (var batch in batches)
         {
@@ -627,13 +612,14 @@ class Program
         try
         {
             logger.LogDebug($"Starting Excel write operation for {email} with {_emails.Count} emails");
-            
-            string name = email.Split('@')[0];
+
+            // Sanitize email address for use as filename to prevent path traversal
+            string name = SanitizeFileName(email.Split('@')[0]);
             var config = new ConfigurationBuilder()
                     .SetBasePath(AppContext.BaseDirectory)
                     .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
                     .Build();
-            var path = config["CofigFile:excelDir"];
+            var path = config["ConfigFile:excelDir"];
             
             if (string.IsNullOrEmpty(path))
             {
@@ -750,12 +736,6 @@ class Program
             logger.LogError($"Error writing to excel file for {email}: {ex.Message}", ex);
             return false;
         }
-        finally
-        {
-            // Ensure proper cleanup
-            GC.Collect();
-            GC.WaitForPendingFinalizers();
-        }
     }
 
     /// <summary>
@@ -773,7 +753,7 @@ class Program
                     .SetBasePath(AppContext.BaseDirectory) // Set the base path
                     .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true) // Add the JSON config file
                     .Build();
-            var excel = config["CofigFile:path"];
+            var excel = config["ConfigFile:path"];
             
             if (string.IsNullOrEmpty(excel))
             {
@@ -803,10 +783,14 @@ class Program
             
             int iInbox = 0, iDeleted = 0, iSent = 0, iAttachment = 0, iBody = 0, iRead = 0;
             int processedRows = 0;
-            
+
             for (int row = 2; row <= lastRow; row++)
             {
-                iInbox = 30; iDeleted = 30; iSent = 30; iAttachment = 1; iBody = 1;
+                iInbox = DEFAULT_DAYS_THRESHOLD;
+                iDeleted = DEFAULT_DAYS_THRESHOLD;
+                iSent = DEFAULT_DAYS_THRESHOLD;
+                iAttachment = DEFAULT_ATTACHMENT_FLAG;
+                iBody = DEFAULT_BODY_FLAG;
                 var email = worksheet.Cell(row, 1).Value;
                 var inbox = int.TryParse(worksheet.Cell(row, 2).Value.ToString(), out iInbox);
                 var deleted = int.TryParse(worksheet.Cell(row, 3).Value.ToString(), out iDeleted);
@@ -815,9 +799,25 @@ class Program
                 var attachment = int.TryParse(worksheet.Cell(row, 6).Value.ToString(), out iAttachment);
                 var read = int.TryParse(worksheet.Cell(row, 7).Value.ToString(), out iRead);
 
+                var emailAddress = email.ToString();
+
+                // Validate email address
+                if (!IsValidEmail(emailAddress))
+                {
+                    logger.LogWarning($"Skipping row {row}: Invalid email address '{emailAddress}'");
+                    continue;
+                }
+
+                // Validate days thresholds (must be positive)
+                if (iInbox < 0 || iDeleted < 0 || iSent < 0)
+                {
+                    logger.LogWarning($"Skipping row {row}: Negative days threshold not allowed (Inbox={iInbox}, Deleted={iDeleted}, Sent={iSent})");
+                    continue;
+                }
+
                 var configData = new ConfigData
                 {
-                    email = email.ToString(),
+                    email = emailAddress,
                     inbox = iInbox,
                     deleted = iDeleted,
                     sent = iSent,
@@ -825,7 +825,7 @@ class Program
                     attachment = iAttachment == 1 ? true : false,
                     read = iRead == 1 ? true : false
                 };
-                
+
                 arr.Add(configData);
                 processedRows++;
                 
@@ -854,21 +854,69 @@ class Program
         if (string.IsNullOrEmpty(html))
             return string.Empty;
 
-        // Decode common HTML entities
-        var decodedHtml = html
-            .Replace("&nbsp;", " ")
-            .Replace("&lt;", "<")
-            .Replace("&gt;", ">")
-            .Replace("&amp;", "&")
-            .Replace("&quot;", "\"")
-            .Replace("&#39;", "'");
-
         // Use HtmlAgilityPack to parse and extract text
         var htmlDoc = new HtmlDocument();
-        htmlDoc.LoadHtml(decodedHtml);
+        htmlDoc.LoadHtml(html);
 
         // Extract plain text by removing all HTML tags
-        return htmlDoc.DocumentNode.InnerText;
+        // HtmlAgilityPack automatically decodes HTML entities
+        var plainText = htmlDoc.DocumentNode.InnerText;
+
+        // Decode any remaining HTML entities using the built-in decoder
+        return System.Net.WebUtility.HtmlDecode(plainText);
+    }
+
+    /// <summary>
+    /// Sanitizes a filename by removing invalid characters and path traversal sequences
+    /// Prevents path traversal attacks
+    /// </summary>
+    /// <param name="fileName">The filename to sanitize</param>
+    /// <returns>Sanitized filename safe for use in file system operations</returns>
+    private static string SanitizeFileName(string fileName)
+    {
+        if (string.IsNullOrWhiteSpace(fileName))
+            return "unknown";
+
+        // Remove any path traversal sequences
+        fileName = fileName.Replace("..", "").Replace("/", "").Replace("\\", "");
+
+        // Remove invalid filename characters
+        var invalidChars = Path.GetInvalidFileNameChars();
+        foreach (var c in invalidChars)
+        {
+            fileName = fileName.Replace(c.ToString(), "");
+        }
+
+        // Ensure filename is not empty after sanitization
+        if (string.IsNullOrWhiteSpace(fileName))
+            return "unknown";
+
+        // Limit filename length to prevent issues with path length limits
+        if (fileName.Length > 100)
+            fileName = fileName.Substring(0, 100);
+
+        return fileName;
+    }
+
+    /// <summary>
+    /// Validates an email address format
+    /// </summary>
+    /// <param name="email">Email address to validate</param>
+    /// <returns>True if valid, false otherwise</returns>
+    private static bool IsValidEmail(string? email)
+    {
+        if (string.IsNullOrWhiteSpace(email))
+            return false;
+
+        try
+        {
+            var addr = new System.Net.Mail.MailAddress(email);
+            return addr.Address == email;
+        }
+        catch
+        {
+            return false;
+        }
     }
 }
 
