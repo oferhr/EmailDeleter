@@ -8,14 +8,27 @@ using Microsoft.Graph.Models;
 using Microsoft.Kiota.Abstractions;
 using System.Text.Json;
 
+/// <summary>
+/// EmailDeleter - Automated bulk email deletion tool for Microsoft 365/Exchange Online
+/// Uses Microsoft Graph API to process and delete emails based on configurable criteria
+/// </summary>
 class Program
 {
+    // Collection of emails currently being processed
     private static List<EmailData> _emails = new List<EmailData>();
+
+    // Logger instances for different log types
     private static SimpleLogger logger;
     private static SimpleLogger infoLogger;
-    private static Dictionary<string, int> counts = new Dictionary<string, int>();
-    
 
+    // Track deletion counts per folder
+    private static Dictionary<string, int> counts = new Dictionary<string, int>();
+
+    /// <summary>
+    /// Application entry point
+    /// Processes multiple email accounts and deletes emails based on configuration
+    /// </summary>
+    /// <param name="args">Command line arguments (not currently used)</param>
     static async Task Main(string[] args)
     {
         var startTime = DateTime.UtcNow;
@@ -56,6 +69,10 @@ class Program
         }
     }
     
+    /// <summary>
+    /// Initializes the logging system with configuration from appsettings.json
+    /// Falls back to basic logging if configuration fails
+    /// </summary>
     private static void InitializeLogger()
     {
         try
@@ -65,17 +82,21 @@ class Program
                     .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
                     .Build();
 
+            // Get log directory from configuration
             var path = config["CofigFile:infoLogDir"];
             if (string.IsNullOrEmpty(path))
             {
                 logger.LogWarning("Info log directory not configured, using default path");
                 path = AppContext.BaseDirectory;
             }
+
+            // Check if debug logging is enabled
             var enableDebugLogging = config["Logging:EnableDebugLogging"] != null
                 ? bool.Parse(config["Logging:EnableDebugLogging"])
                 : false;
-            logger = new SimpleLogger("log", path, enableDebugLogging);
 
+            // Initialize logger instances
+            logger = new SimpleLogger("log", path, enableDebugLogging);
             infoLogger = new SimpleLogger("log", path, enableDebugLogging);
             logger.LogInfo($"Info logger initialized with path: {path}");
         }
@@ -87,17 +108,22 @@ class Program
         }
     }
     
+    /// <summary>
+    /// Fetches emails from a specific folder based on age and criteria
+    /// Processes emails in batches and exports metadata to Excel
+    /// </summary>
+    /// <param name="config">Email account configuration</param>
+    /// <param name="dir">Folder name (Inbox, SentItems, DeletedItems)</param>
+    /// <param name="days">Number of days threshold (emails older than this will be processed)</param>
+    /// <param name="isDeleted">True if processing DeletedItems folder (skips move operation)</param>
+    /// <returns>Number of emails processed</returns>
     static async Task<int> fetchEmails(ConfigData config, string dir, int days, bool isDeleted)
     {
         var startTime = DateTime.UtcNow;
         logger.LogInfo($"Starting email fetch for {config.email} in {dir} folder (days: {days}, isDeleted: {isDeleted})");
 
-        //Load secrets from graph-secrets.json
-        // We keep secrets in external file to avoid committing them to git during development
-        // for production use
-        // var clientId = "xxx";
-        //var tenentId = "xxx";
-        //var secret = "xxx";
+        // Load Azure AD credentials from graph-secrets.json
+        // This file is kept separate to avoid committing secrets to version control
         var secretsConfig = new ConfigurationBuilder()
            .SetBasePath(AppContext.BaseDirectory)
            .AddJsonFile("graph-secrets.json", optional: false, reloadOnChange: true)
@@ -106,25 +132,28 @@ class Program
         var tenentId = secretsConfig["tenantId"];
         var secret = secretsConfig["secret"];
 
-        //var clientId = "xx";
-        //var tenentId = "xx";
-        //var secret = "xx";
-
         logger.LogDebug($"Using tenant ID: {tenentId}, client ID: {clientId}");
         infoLogger.LogInfo($"Fetching emails for {config.email} in {dir} folder.");
-        
+
+        // Authenticate with Azure AD using client credentials flow
         var clientSecretCredential = new ClientSecretCredential(tenentId, clientId, secret);
         var graphClient = new GraphServiceClient(clientSecretCredential);
         int counter = 0;
         try
         {
+            // Build filter for Microsoft Graph API query
+            // Calculate date threshold based on days parameter
             var dateThreshold = DateTime.Now.AddDays(days*-1).ToString("yyyy-MM-ddTHH:mm:ssZ");
+
+            // Add attachment filter if configured
             var attachment = config.attachment ? "hasAttachments eq true and" : "";
             var filter = $"{attachment} receivedDateTime lt {dateThreshold}";
-            
+
             logger.LogDebug($"Using filter: {filter}");
             logger.LogDebug($"Date threshold: {dateThreshold}");
-            
+
+            // Query Microsoft Graph API for messages matching criteria
+            // Process in batches of 10 messages per page
             var page = await graphClient.Users[config.email]
                 .MailFolders[dir]
                 .Messages
@@ -136,7 +165,7 @@ class Program
                 });
 
 
-            
+            // Process all pages of results
             var pageCount = 0;
             while (page != null)
             {
@@ -190,8 +219,12 @@ class Program
 
                     //Console.WriteLine("Email deleted.");
                 }
+
+                // Process the batch of emails
                 var isOK = true;
                 var newEmails = new List<EmailData>();
+
+                // Step 1: Move emails to DeletedItems (unless already in DeletedItems)
                 if (!isDeleted)
                 {
                     try
@@ -210,10 +243,12 @@ class Program
                 }
                 else
                 {
+                    // Already in DeletedItems, no need to move
                     logger.LogDebug($"Skipping move operation for DeletedItems folder");
                     newEmails = _emails;
                 }
-                
+
+                // Step 2: Permanently delete emails (hard delete)
                 if (isOK)
                 {
                     logger.LogDebug($"Processing delete batch for {newEmails.Count} messages");
@@ -222,8 +257,8 @@ class Program
                     var deleteDuration = DateTime.UtcNow - deleteStartTime;
                     logger.LogPerformance($"Delete batch for {newEmails.Count} messages", deleteDuration);
                 }
-                //var isok = await moveToDeleted(_emails, graphClient, config.email);
-                //await ProcessDeleteBatchAsync(_emails, graphClient, config.email);
+
+                // Step 3: Export email metadata to Excel for audit trail
                 var excelStartTime = DateTime.UtcNow;
                 var excelSuccess = WriteToExcel(config.email);
                 var excelDuration = DateTime.UtcNow - excelStartTime;
@@ -275,6 +310,16 @@ class Program
         
         return counter;
     }
+
+    /// <summary>
+    /// Moves a batch of emails to the DeletedItems folder using Microsoft Graph API batch operations
+    /// Updates email objects with new IDs after successful move
+    /// Falls back to individual moves if batch operation fails
+    /// </summary>
+    /// <param name="emails">List of emails to move</param>
+    /// <param name="graphClient">Authenticated Graph API client</param>
+    /// <param name="email">Email address of the mailbox being processed</param>
+    /// <returns>Updated list of emails with new IDs</returns>
     static async Task<List<EmailData>> moveToDeleted(List<EmailData> emails, GraphServiceClient graphClient, string email)
     {
         logger.LogDebug($"Starting batch move operation for {emails.Count} emails to DeletedItems");
@@ -432,6 +477,15 @@ class Program
         
         return emails;
     }
+
+    /// <summary>
+    /// Permanently deletes emails from DeletedItems folder using hard delete
+    /// Processes in batches using Microsoft Graph API batch operations
+    /// Falls back to individual deletes if batch operation fails
+    /// </summary>
+    /// <param name="emails">List of emails to delete (with newId set from move operation)</param>
+    /// <param name="graphClient">Authenticated Graph API client</param>
+    /// <param name="email">Email address of the mailbox being processed</param>
     private static async Task ProcessDeleteBatchAsync(List<EmailData> emails, GraphServiceClient graphClient, string email)
     {
         logger.LogDebug($"Starting batch delete operation for {emails.Count} emails from DeletedItems");
@@ -560,6 +614,14 @@ class Program
         var batchDuration = DateTime.UtcNow - batchStartTime;
         logger.LogBatchOperation("Delete from DeletedItems", emails.Count, successCount, failureCount, batchDuration);
     }
+
+    /// <summary>
+    /// Exports email metadata to Excel file for audit trail
+    /// Creates new file or appends to existing file
+    /// Handles file locking by creating timestamped backup files
+    /// </summary>
+    /// <param name="email">Email address (used for filename)</param>
+    /// <returns>True if successful, false otherwise</returns>
     private static bool WriteToExcel(string email)
     {
         try
@@ -695,6 +757,12 @@ class Program
             GC.WaitForPendingFinalizers();
         }
     }
+
+    /// <summary>
+    /// Reads email account configuration from Excel file
+    /// Excel file path is specified in appsettings.json
+    /// </summary>
+    /// <returns>List of ConfigData objects with email account processing rules</returns>
     static List<ConfigData> ReadConfig()
     {
         try
@@ -774,11 +842,19 @@ class Program
             throw;
         }
     }
+
+    /// <summary>
+    /// Extracts plain text from HTML email body
+    /// Decodes HTML entities and strips all HTML tags
+    /// </summary>
+    /// <param name="html">HTML content from email body</param>
+    /// <returns>Plain text without HTML formatting</returns>
     private static string ExtractPlainTextFromHtml(string html)
     {
         if (string.IsNullOrEmpty(html))
             return string.Empty;
 
+        // Decode common HTML entities
         var decodedHtml = html
             .Replace("&nbsp;", " ")
             .Replace("&lt;", "<")
@@ -786,6 +862,8 @@ class Program
             .Replace("&amp;", "&")
             .Replace("&quot;", "\"")
             .Replace("&#39;", "'");
+
+        // Use HtmlAgilityPack to parse and extract text
         var htmlDoc = new HtmlDocument();
         htmlDoc.LoadHtml(decodedHtml);
 
@@ -794,25 +872,62 @@ class Program
     }
 }
 
+/// <summary>
+/// Configuration data for an email account
+/// Specifies which emails to process and how
+/// </summary>
 class ConfigData
 {
+    /// <summary>Email address to process</summary>
     public string? email { get; set; }
+
+    /// <summary>Age threshold in days for Inbox folder</summary>
     public int inbox { get; set; }
+
+    /// <summary>Age threshold in days for DeletedItems folder</summary>
     public int deleted { get; set; }
+
+    /// <summary>Age threshold in days for SentItems folder</summary>
     public int sent { get; set; }
+
+    /// <summary>Include email body in Excel export</summary>
     public bool body { get; set; }
+
+    /// <summary>Only process emails with attachments</summary>
     public bool attachment { get; set; }
+
+    /// <summary>Only process read emails</summary>
     public bool read { get; set; }
 }
+
+/// <summary>
+/// Email metadata for processing and export
+/// Stores information about emails to be deleted
+/// </summary>
 class EmailData
 {
+    /// <summary>Original message ID in source folder</summary>
     public string? id { get; set; }
+
+    /// <summary>Sender email address</summary>
     public string? from { get; set; }
+
+    /// <summary>List of recipient email addresses</summary>
     public List<string>? toRecipients { get; set; }
+
+    /// <summary>Email body content (plain text)</summary>
     public string? body { get; set; }
+
+    /// <summary>Email subject line</summary>
     public string? subject { get; set; }
+
+    /// <summary>Date and time email was received (ISO 8601 format)</summary>
     public string? receivedDateTime { get; set; }
+
+    /// <summary>New message ID after moving to DeletedItems</summary>
     public string? newId { get; set; }
+
+    /// <summary>Source folder name (Inbox, SentItems, DeletedItems)</summary>
     public string? source { get; set; }
 }
 
