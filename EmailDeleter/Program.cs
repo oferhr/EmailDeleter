@@ -91,9 +91,9 @@ class Program
 
             // Get log directory from configuration
             var path = config["ConfigFile:infoLogDir"];
-            if (string.IsNullOrEmpty(path))
+            var useDefaultPath = string.IsNullOrEmpty(path);
+            if (useDefaultPath)
             {
-                logger.LogWarning("Info log directory not configured, using default path");
                 path = AppContext.BaseDirectory;
             }
 
@@ -105,6 +105,12 @@ class Program
             // Initialize logger instances
             logger = new SimpleLogger("log", path, enableDebugLogging);
             infoLogger = new SimpleLogger("log", path, enableDebugLogging);
+
+            // Log initialization status after logger is created
+            if (useDefaultPath)
+            {
+                logger.LogWarning("Info log directory not configured, using default path");
+            }
             logger.LogInfo($"Info logger initialized with path: {path}");
         }
         catch (Exception ex)
