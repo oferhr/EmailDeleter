@@ -6,3 +6,4 @@ bin/
 obj/
 # Ignore .vs directory
 /.vs
+/setup-env.bat

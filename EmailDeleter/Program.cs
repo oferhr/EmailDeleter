@@ -92,23 +92,18 @@ class Program
         var startTime = DateTime.UtcNow;
         logger.LogInfo($"Starting email fetch for {config.email} in {dir} folder (days: {days}, isDeleted: {isDeleted})");
 
-        //Load secrets from graph-secrets.json
-        // We keep secrets in external file to avoid committing them to git during development
-        // for production use
-        // var clientId = "xxx";
-        //var tenentId = "xxx";
-        //var secret = "xxx";
-        var secretsConfig = new ConfigurationBuilder()
-           .SetBasePath(AppContext.BaseDirectory)
-           .AddJsonFile("graph-secrets.json", optional: false, reloadOnChange: true)
-           .Build();
-        var clientId = secretsConfig["clientId"];
-        var tenentId = secretsConfig["tenantId"];
-        var secret = secretsConfig["secret"];
+        // Load credentials from environment variables
+        // Users must run setup-env.bat once per computer to configure these
+        var clientId = Environment.GetEnvironmentVariable("GraphClientId");
+        var tenentId = Environment.GetEnvironmentVariable("GraphTenantId");
+        var secret = Environment.GetEnvironmentVariable("GraphClientSecret");
 
-        //var clientId = "xx";
-        //var tenentId = "xx";
-        //var secret = "xx";
+        if (string.IsNullOrEmpty(clientId) || string.IsNullOrEmpty(tenentId) || string.IsNullOrEmpty(secret))
+        {
+            var errorMsg = "Graph API credentials not found in environment variables. Please run setup-env.bat first to configure your computer.";
+            logger.LogError(errorMsg);
+            throw new InvalidOperationException(errorMsg);
+        }
 
         logger.LogDebug($"Using tenant ID: {tenentId}, client ID: {clientId}");
         infoLogger.LogInfo($"Fetching emails for {config.email} in {dir} folder.");
@@ -218,14 +213,14 @@ class Program
                 {
                     logger.LogDebug($"Processing delete batch for {newEmails.Count} messages");
                     var deleteStartTime = DateTime.UtcNow;
-                    await ProcessDeleteBatchAsync(newEmails, graphClient, config.email);
+                    await ProcessDeleteBatchAsync(newEmails, graphClient, config?.email);
                     var deleteDuration = DateTime.UtcNow - deleteStartTime;
                     logger.LogPerformance($"Delete batch for {newEmails.Count} messages", deleteDuration);
                 }
                 //var isok = await moveToDeleted(_emails, graphClient, config.email);
                 //await ProcessDeleteBatchAsync(_emails, graphClient, config.email);
                 var excelStartTime = DateTime.UtcNow;
-                var excelSuccess = WriteToExcel(config.email);
+                var excelSuccess = WriteToExcel(config?.email);
                 var excelDuration = DateTime.UtcNow - excelStartTime;
                 logger.LogPerformance($"Excel write for {_emails.Count} emails", excelDuration, $"Success: {excelSuccess}");
                 
