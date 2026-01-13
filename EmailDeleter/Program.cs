@@ -152,7 +152,7 @@ class Program
         infoLogger.LogInfo($"Fetching emails for {config.email} in {dir} folder.");
 
         // Authenticate with Azure AD using client credentials flow
-        var clientSecretCredential = new ClientSecretCredential(tenantId, clientId, secret);
+        var clientSecretCredential = new ClientSecretCredential(tenentId, clientId, secret);
         var graphClient = new GraphServiceClient(clientSecretCredential);
         int counter = 0;
         try
