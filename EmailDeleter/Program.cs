@@ -135,7 +135,6 @@ class Program
         var startTime = DateTime.UtcNow;
         logger.LogInfo($"Starting email fetch for {config.email} in {dir} folder (days: {days}, isDeleted: {isDeleted})");
 
-<<<<<<< HEAD
         // Load credentials from environment variables
         // Users must run setup-env.bat once per computer to configure these
         var clientId = Environment.GetEnvironmentVariable("GraphClientId");
@@ -150,19 +149,6 @@ class Program
         }
 
         logger.LogDebug($"Using tenant ID: {tenentId}, client ID: {clientId}");
-=======
-        // Load Azure AD credentials from graph-secrets.json
-        // This file is kept separate to avoid committing secrets to version control
-        var secretsConfig = new ConfigurationBuilder()
-           .SetBasePath(AppContext.BaseDirectory)
-           .AddJsonFile("graph-secrets.json", optional: false, reloadOnChange: true)
-           .Build();
-        var clientId = secretsConfig["clientId"];
-        var tenantId = secretsConfig["tenantId"];
-        var secret = secretsConfig["secret"];
-
-        logger.LogDebug($"Authenticating with Azure AD for user: {config.email}");
->>>>>>> 3b17946cbaed540a35c7edd8dedae3d38567dafd
         infoLogger.LogInfo($"Fetching emails for {config.email} in {dir} folder.");
 
         // Authenticate with Azure AD using client credentials flow
