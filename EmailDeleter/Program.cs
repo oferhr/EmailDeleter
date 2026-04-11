@@ -148,7 +148,7 @@ class Program
             throw new InvalidOperationException(errorMsg);
         }
 
-        logger.LogDebug($"Using tenant ID: {tenentId}, client ID: {clientId}");
+        logger.LogDebug("credentials loaded: yes");
         infoLogger.LogInfo($"Fetching emails for {config.email} in {dir} folder.");
 
         // Authenticate with Azure AD using client credentials flow
